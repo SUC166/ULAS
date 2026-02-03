@@ -1,316 +1,367 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import math
+import random
+import string
 import os
-import streamlit.components.v1 as components
+import json
+import hashlib
 
 # ────────────────────────────────────────────────
 #               CONFIGURATION
 # ────────────────────────────────────────────────
 
-LECTURE_HALL_LAT       = 5.3834924
-LECTURE_HALL_LON       = 6.9991832
-ALLOWED_RADIUS_METERS  = 80           # Adjust after real testing (60–120 typical)
+SCHOOLS_DEPTS = {
+    "SAAT (Agriculture & Agric Tech)": [
+        "Agricultural Economics", "Agricultural Extension", "Animal Science and Technology",
+        "Crop Science and Technology", "Fisheries and Aquaculture Technology",
+        "Forestry and Wildlife Technology", "Soil Science and Technology"
+    ],
+    "SEET (Engineering & Eng Tech)": [
+        "Agricultural and Bioresources Engineering", "Biomedical Engineering", "Chemical Engineering",
+        "Civil Engineering", "Electrical and Electronics Engineering", "Food Science and Technology",
+        "Materials and Metallurgical Engineering", "Mechanical Engineering", "Mechatronic Engineering",
+        "Petroleum Engineering", "Polymer and Textile Engineering"
+    ],
+    "SOES (Environmental Tech)": [
+        "Architecture", "Building Technology", "Environmental Technology", "Quantity Surveying",
+        "Surveying and Geoinformatics", "Urban and Regional Planning"
+    ],
+    "SOHT (Health Tech)": [
+        "Biomedical Technology", "Dental Technology", "Environmental Health Science", "Optometry",
+        "Prosthetics and Orthotics", "Public Health Technology"
+    ],
+    "SICT (Info & Comm Tech)": [
+        "Computer Science", "Cyber Security Science", "Information Technology", "Software Engineering"
+    ],
+    "SMAT (Management Tech)": [
+        "Financial Management Technology", "Information Management Technology",
+        "Maritime Management Technology", "Project Management Technology", "Transport Management Technology"
+    ],
+    "SOPS (Physical Sciences)": [
+        "Chemistry", "Geology", "Mathematics", "Physics", "Statistics"
+    ],
+    "SOBS (Biological Sciences)": [
+        "Biochemistry", "Biology", "Biotechnology", "Microbiology", "Forensic Science"
+    ],
+    "SBMS (Basic Medical Sciences)": [
+        "Anatomy", "Physiology"
+    ],
+}
 
-# CHANGE THIS BEFORE REAL USE — only the course rep should know it
-ADMIN_PASSWORD         = "course_rep_2025_secret"   # ← VERY IMPORTANT: CHANGE THIS!
+LEVELS = ["100 Level", "200 Level", "300 Level", "400 Level", "500 Level"]
 
-STUDENTS_FILE   = "students.csv"
-ATTENDANCE_FILE = "attendance.csv"
+# CHANGE THESE TWO BEFORE USING!
+SETUP_SECRET = "futo_setup_2026_admin"           # Secret to access rep creation mode
+INITIAL_ADMIN_PASSWORD = "change_me_12345"       # Use this only the first time
 
-# Haversine formula - distance in meters
-def is_in_lecture_hall(lat: float | None, lon: float | None) -> tuple[bool, float | None]:
-    if lat is None or lon is None:
-        return False, None
-    
-    R = 6371000  # Earth radius in meters
-    dlat = math.radians(lat - LECTURE_HALL_LAT)
-    dlon = math.radians(lon - LECTURE_HALL_LON)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(LECTURE_HALL_LAT)) \
-        * math.cos(math.radians(lat)) * math.sin(dlon/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    distance = R * c
-    return distance <= ALLOWED_RADIUS_METERS, round(distance, 1)
-
+STUDENTS_FILE    = "students.csv"
+ATTENDANCE_FILE  = "attendance.csv"
+CODES_FILE       = "attendance_codes.json"
+REPS_FILE        = "course_reps.json"   # { "school-dept-level": "hashed_password" }
 # ────────────────────────────────────────────────
-#               DATA LOAD FUNCTIONS
+#               HELPER FUNCTIONS
 # ────────────────────────────────────────────────
 
-def load_students():
-    if os.path.exists(STUDENTS_FILE):
-        return pd.read_csv(STUDENTS_FILE)
-    df = pd.DataFrame(columns=["student_id", "name"])
-    df.to_csv(STUDENTS_FILE, index=False)
-    return df
+def hash_pw(pw: str) -> str:
+    return hashlib.sha256(pw.encode()).hexdigest()
 
-def load_attendance():
-    if os.path.exists(ATTENDANCE_FILE):
-        return pd.read_csv(ATTENDANCE_FILE)
-    cols = ["student_id", "name", "date", "time", "session", "distance_m"]
-    df = pd.DataFrame(columns=cols)
-    df.to_csv(ATTENDANCE_FILE, index=False)
-    return df
+def generate_code() -> str:
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(random.choice(chars) for _ in range(6))
 
+def load_reps() -> dict:
+    if os.path.exists(REPS_FILE):
+        with open(REPS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_reps(data: dict):
+    with open(REPS_FILE, "w") as f:
+        json.dump(data, f)
+
+def load_codes() -> dict:
+    if os.path.exists(CODES_FILE):
+        with open(CODES_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_codes(data: dict):
+    with open(CODES_FILE, "w") as f:
+        json.dump(data, f)
 # ────────────────────────────────────────────────
 #               SESSION STATE INITIALIZATION
 # ────────────────────────────────────────────────
 
-# Defensive initialization - ensures keys exist even on cold start
-required_keys = {
-    "initialized": False,
-    "students_df": load_students(),
-    "attendance_df": load_attendance(),
-    "attendance_active": False,
-    "current_session": None,
-    "user_role": None,
-    "user_id": None,
-}
+if "initialized" not in st.session_state:
+    st.session_state.initialized = True
+    st.session_state.students_df = (
+        pd.read_csv(STUDENTS_FILE)
+        if os.path.exists(STUDENTS_FILE)
+        else pd.DataFrame(columns=["student_id", "name", "school", "dept", "level"])
+    )
+    st.session_state.attendance_df = (
+        pd.read_csv(ATTENDANCE_FILE)
+        if os.path.exists(ATTENDANCE_FILE)
+        else pd.DataFrame(columns=["student_id", "name", "school", "dept", "level", "date", "time", "session"])
+    )
+    st.session_state.codes = load_codes()
+    st.session_state.reps = load_reps()
+    st.session_state.user_role = None
+    st.session_state.user_data = {}
 
-for key, default in required_keys.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
-
-if not st.session_state["initialized"]:
-    st.session_state["initialized"] = True
-
-# Safe shortcuts
-students_df   = st.session_state["students_df"]
-attendance_df = st.session_state["attendance_df"]
-
+students_df   = st.session_state.students_df
+attendance_df = st.session_state.attendance_df
+codes         = st.session_state.codes
+reps          = st.session_state.reps
 # ────────────────────────────────────────────────
-#               SIDEBAR – LOGIN
+#               SIDEBAR – LOGIN & SETUP
 # ────────────────────────────────────────────────
 
-st.sidebar.title("Attendance System")
+st.sidebar.title("FUTO Attendance System")
 
-if st.session_state["user_role"] is None:
-    st.sidebar.subheader("Login")
-    user_id_input = st.sidebar.text_input("Student ID / Matric No", key="login_student_id").strip()
-    admin_pw_input = st.sidebar.text_input("Password (Course Rep only)", type="password", key="admin_password")
+# Hidden setup mode for creating course reps
+setup_mode = st.sidebar.checkbox("Admin Setup (Course Rep Creation)", value=False)
+if setup_mode:
+    secret_input = st.sidebar.text_input("Setup Secret Key", type="password")
+    if secret_input == SETUP_SECRET:
+        st.sidebar.success("Setup mode enabled")
+        s_setup = st.sidebar.selectbox("School", list(SCHOOLS_DEPTS.keys()), key="s_setup")
+        d_setup = st.sidebar.selectbox("Department", SCHOOLS_DEPTS[s_setup], key="d_setup")
+        l_setup = st.sidebar.selectbox("Level", LEVELS, key="l_setup")
+        new_password = st.sidebar.text_input("New Course Rep Password", type="password", key="new_pw")
+        rep_key = f"{s_setup}-{d_setup}-{l_setup}"
 
-    col1, col2 = st.sidebar.columns(2)
-    
-    if col1.button("Login as Student"):
-        if not user_id_input:
-            st.sidebar.error("Please enter your Student ID")
-        elif user_id_input in students_df["student_id"].values:
-            st.session_state["user_role"] = "student"
-            st.session_state["user_id"]   = user_id_input
+        if st.sidebar.button("Create / Update Course Rep"):
+            if new_password.strip():
+                reps[rep_key] = hash_pw(new_password.strip())
+                save_reps(reps)
+                st.session_state.reps = reps
+                st.sidebar.success(f"Course Rep set for {rep_key}")
+            else:
+                st.sidebar.error("Enter a password")
+    else:
+        if secret_input:
+            st.sidebar.error("Incorrect secret key")
+
+# Normal login
+role = st.sidebar.radio("Login As", ["Student", "Course Rep"])
+
+school = st.sidebar.selectbox("School", list(SCHOOLS_DEPTS.keys()))
+dept   = st.sidebar.selectbox("Department", SCHOOLS_DEPTS[school])
+level  = st.sidebar.selectbox("Level", LEVELS)
+
+key_prefix = f"{school}-{dept}-{level}"
+
+if role == "Student":
+    student_id = st.sidebar.text_input("Matric Number").strip().upper()
+    if st.sidebar.button("Login / Register"):
+        if not student_id:
+            st.sidebar.error("Enter Matric Number")
+        else:
+            match = students_df[
+                (students_df["student_id"] == student_id) &
+                (students_df["school"] == school) &
+                (students_df["dept"] == dept) &
+                (students_df["level"] == level)
+            ]
+            if not match.empty:
+                st.session_state.user_role = "student"
+                st.session_state.user_data = {
+                    "school": school, "dept": dept, "level": level,
+                    "student_id": student_id, "name": match["name"].iloc[0]
+                }
+                st.rerun()
+            else:
+                name = st.sidebar.text_input("Your Full Name (first time)")
+                if name and st.sidebar.button("Register"):
+                    new_row = pd.DataFrame({
+                        "student_id": [student_id], "name": [name],
+                        "school": [school], "dept": [dept], "level": [level]
+                    })
+                    st.session_state.students_df = pd.concat([students_df, new_row], ignore_index=True)
+                    st.session_state.students_df.to_csv(STUDENTS_FILE, index=False)
+                    st.session_state.user_role = "student"
+                    st.session_state.user_data = {
+                        "school": school, "dept": dept, "level": level,
+                        "student_id": student_id, "name": name
+                    }
+                    st.success("Registered!")
+                    st.rerun()
+
+else:  # Course Rep
+    password_input = st.sidebar.text_input("Your Password", type="password")
+    if st.sidebar.button("Login as Course Rep"):
+        rep_key = key_prefix
+        if rep_key in reps and hash_pw(password_input) == reps[rep_key]:
+            st.session_state.user_role = "admin"
+            st.session_state.user_data = {
+                "school": school, "dept": dept, "level": level, "rep_key": rep_key
+            }
             st.rerun()
         else:
-            st.sidebar.error("Student ID not found. Ask the Course Rep to add you.")
+            st.sidebar.error("Incorrect password or no account for this level")
 
-    if col2.button("Login as Course Rep"):
-        if admin_pw_input == ADMIN_PASSWORD:
-            st.session_state["user_role"] = "admin"
-            st.rerun()
-        else:
-            st.sidebar.error("Incorrect password")
-
-else:
-    role_display = "Course Rep (Admin)" if st.session_state["user_role"] == "admin" else "Student"
-    id_display = st.session_state["user_id"] or "Admin"
-    st.sidebar.markdown(f"**Logged in as** {role_display} ({id_display})")
-    
+# Show current login status
+if st.session_state.user_role is not None:
+    data = st.session_state.user_data
+    role_text = "Course Rep" if st.session_state.user_role == "admin" else "Student"
+    st.sidebar.markdown(
+        f"**Logged in as {role_text}**  \n"
+        f"{data.get('school')} → {data.get('dept')} → {data.get('level')}"
+    )
     if st.sidebar.button("Logout"):
-        st.session_state.pop("user_role", None)
-        st.session_state.pop("user_id", None)
+        st.session_state.user_role = None
+        st.session_state.user_data = {}
         st.rerun()
-
 # ────────────────────────────────────────────────
 #               MAIN CONTENT
 # ────────────────────────────────────────────────
 
-st.title("Lecture Attendance – Location Verified")
-st.caption(f"Reference location: {LECTURE_HALL_LAT:.6f}, {LECTURE_HALL_LON:.6f}  |  Allowed radius: ±{ALLOWED_RADIUS_METERS} m")
+st.title("FUTO Departmental Attendance System")
+st.caption("One-time unique codes • Each level has its own Course Rep")
 
-if st.session_state["user_role"] is None:
-    st.info("Please log in from the sidebar.")
+if st.session_state.user_role is None:
+    st.info("Please log in using the sidebar.")
     st.stop()
 
-# ── ADMIN (COURSE REP) PANEL ────────────────────────────────
-if st.session_state["user_role"] == "admin":
-    st.subheader("Course Representative Controls")
+session_key = key_prefix
 
-    with st.expander("Manage Students"):
-        new_id = st.text_input("New Student ID", key="admin_new_id")
-        new_name = st.text_input("Full Name", key="admin_new_name")
-        
-        if st.button("Add Student"):
-            if new_id.strip() and new_name.strip():
-                if new_id in students_df["student_id"].values:
-                    st.error("This Student ID already exists")
+if st.session_state.user_role == "admin":
+    st.subheader("Course Rep Dashboard")
+
+    current_session_name = st.session_state.get("current_session", {}).get(session_key)
+
+    if current_session_name is None:
+        session_name_input = st.text_input("Session / Course & Date")
+        if st.button("Start Attendance Session"):
+            if session_name_input.strip():
+                dept_students = students_df[
+                    (students_df["school"] == data["school"]) &
+                    (students_df["dept"] == data["dept"]) &
+                    (students_df["level"] == data["level"])
+                ]
+                if dept_students.empty:
+                    st.warning("No students registered in this level yet.")
                 else:
-                    new_row = pd.DataFrame({"student_id": [new_id], "name": [new_name]})
-                    students_df = pd.concat([students_df, new_row], ignore_index=True)
-                    students_df.to_csv(STUDENTS_FILE, index=False)
-                    st.session_state["students_df"] = students_df
-                    st.success(f"Added {new_name} ({new_id})")
+                    new_codes_dict = {}
+                    for _, row in dept_students.iterrows():
+                        new_codes_dict[row["student_id"]] = generate_code()
+
+                    codes[session_key] = {
+                        "session_name": session_name_input.strip(),
+                        "codes": new_codes_dict
+                    }
+                    save_codes(codes)
+                    st.session_state.codes = codes
+                    st.session_state.current_session = {session_key: session_name_input.strip()}
+                    st.success(f"Session started. {len(new_codes_dict)} codes generated.")
                     st.rerun()
             else:
-                st.error("Both fields are required")
-
-        if not students_df.empty:
-            st.dataframe(students_df.style.hide(axis="index"), use_container_width=True)
-
-    st.subheader("Attendance Session Control")
-    
-    if not st.session_state["attendance_active"]:
-        default_name = datetime.now().strftime("%Y-%m-%d   %H:%M   Lecture")
-        session_name = st.text_input("Session / Course & Date", value=default_name)
-        
-        if st.button("Start Attendance Session"):
-            if session_name.strip():
-                st.session_state["attendance_active"] = True
-                st.session_state["current_session"] = session_name.strip()
-                st.success(f"Session started: **{session_name}**")
-                st.rerun()
-            else:
-                st.error("Please enter a session name")
+                st.error("Please enter session name")
     else:
-        st.success(f"**ACTIVE SESSION:** {st.session_state['current_session']}")
-        if st.button("End Session"):
-            st.session_state["attendance_active"] = False
-            st.session_state["current_session"] = None
-            st.success("Session has been closed.")
-            st.rerun()
+        st.success(f"**Active Session:** {current_session_name}")
+        current_codes = codes.get(session_key, {}).get("codes", {})
 
-    if st.button("View All Attendance Records"):
-        if attendance_df.empty:
-            st.info("No attendance records yet.")
-        else:
-            st.dataframe(
-                attendance_df.sort_values(by="date", ascending=False),
-                use_container_width=True,
-                hide_index=True
+        if current_codes:
+            code_list = [{"Matric Number": sid, "Code": code} for sid, code in current_codes.items()]
+            st.dataframe(pd.DataFrame(code_list).sort_values("Matric Number"), use_container_width=True, hide_index=True)
+
+            txt_content = "\n".join([f"{sid}: {code}" for sid, code in current_codes.items()])
+            st.download_button(
+                label="Download all codes (TXT)",
+                data=txt_content,
+                file_name=f"codes_{session_key.replace(' ', '_')}.txt",
+                mime="text/plain"
             )
 
-# ── STUDENT PANEL ───────────────────────────────────────────
-elif st.session_state["user_role"] == "student":
+        if st.button("End Session & Delete Codes"):
+            if session_key in codes:
+                del codes[session_key]
+                save_codes(codes)
+                st.session_state.codes = codes
+            if "current_session" in st.session_state and session_key in st.session_state.current_session:
+                del st.session_state.current_session[session_key]
+            st.success("Session closed. Codes removed.")
+            st.rerun()
+
+    # Attendance records for this level
+    level_records = attendance_df[
+        (attendance_df["school"] == data["school"]) &
+        (attendance_df["dept"] == data["dept"]) &
+        (attendance_df["level"] == data["level"])
+    ]
+    if st.button("Show Attendance Records"):
+        if level_records.empty:
+            st.info("No attendance recorded yet for this level.")
+        else:
+            st.dataframe(level_records.sort_values("date", ascending=False), use_container_width=True)
+
+elif st.session_state.user_role == "student":
     st.subheader("Mark Your Attendance")
 
-    if not st.session_state["attendance_active"]:
-        st.warning("No active attendance session right now. Please wait for the Course Rep to start one.")
+    current_session_name = st.session_state.get("current_session", {}).get(session_key)
+
+    if current_session_name is None:
+        st.warning("No active attendance session for your level right now.")
     else:
         already_marked = attendance_df[
-            (attendance_df["student_id"] == st.session_state["user_id"]) &
-            (attendance_df["session"] == st.session_state["current_session"])
+            (attendance_df["student_id"] == data["student_id"]) &
+            (attendance_df["session"] == current_session_name) &
+            (attendance_df["school"] == data["school"]) &
+            (attendance_df["dept"] == data["dept"]) &
+            (attendance_df["level"] == data["level"])
         ].shape[0] > 0
 
         if already_marked:
-            st.success("You have **already marked** attendance for this session.")
+            st.success("You have already been marked present for this session.")
         else:
-            st.write("**Share your location** to confirm you are in the lecture hall:")
+            user_code = st.text_input("Enter the unique code from your Course Rep", max_chars=6).strip().upper()
 
-            # JavaScript geolocation component
-            geo_component = """
-            <div id="geo-status" style="margin: 1em 0; font-weight: bold;">Waiting for location...</div>
-            <button id="geo-button" onclick="getLocation()">Get Location & Mark</button>
+            if st.button("Submit Code"):
+                if not user_code:
+                    st.error("Please enter the code")
+                else:
+                    session_data = codes.get(session_key, {})
+                    session_codes = session_data.get("codes", {})
+                    assigned_code = session_codes.get(data["student_id"])
 
-            <script>
-            function getLocation() {
-                const status = document.getElementById("geo-status");
-                const btn = document.getElementById("geo-button");
-                btn.disabled = true;
-                btn.innerText = "Requesting...";
-
-                if (!navigator.geolocation) {
-                    status.innerHTML = "Geolocation is not supported by this browser.";
-                    btn.disabled = false;
-                    btn.innerText = "Retry";
-                    return;
-                }
-
-                status.innerHTML = "Getting location... (please allow permission)";
-
-                navigator.geolocation.getCurrentPosition(
-                    (position) => {
-                        const lat = position.coords.latitude.toFixed(6);
-                        const lon = position.coords.longitude.toFixed(6);
-                        const acc = Math.round(position.coords.accuracy);
-
-                        status.innerHTML = `Location received!<br>Lat: ${lat}<br>Lon: \( {lon}<br>Accuracy: ± \){acc} m`;
-
-                        // Pass data to Streamlit via query params
-                        const params = new URLSearchParams(window.location.search);
-                        params.set('lat', lat);
-                        params.set('lon', lon);
-                        params.set('acc', acc);
-                        window.location.search = params.toString();
-                    },
-                    (error) => {
-                        let msg = "Error: ";
-                        switch(error.code) {
-                            case error.PERMISSION_DENIED:  msg += "Permission denied"; break;
-                            case error.POSITION_UNAVAILABLE: msg += "Position unavailable"; break;
-                            case error.TIMEOUT:            msg += "Request timed out"; break;
-                            default:                       msg += "Unknown error";
+                    if assigned_code and user_code == assigned_code:
+                        now = datetime.now()
+                        record = {
+                            "student_id": data["student_id"],
+                            "name": data["name"],
+                            "school": data["school"],
+                            "dept": data["dept"],
+                            "level": data["level"],
+                            "date": now.strftime("%Y-%m-%d"),
+                            "time": now.strftime("%H:%M:%S"),
+                            "session": current_session_name
                         }
-                        status.innerHTML = msg;
-                        btn.disabled = false;
-                        btn.innerText = "Retry";
-                    },
-                    {
-                        enableHighAccuracy: true,
-                        timeout: 12000,
-                        maximumAge: 0
-                    }
-                );
-            }
+                        new_record_df = pd.DataFrame([record])
+                        st.session_state.attendance_df = pd.concat(
+                            [attendance_df, new_record_df], ignore_index=True
+                        )
+                        st.session_state.attendance_df.to_csv(ATTENDANCE_FILE, index=False)
 
-            // Auto start (comment out if you prefer button only)
-            window.addEventListener('load', () => setTimeout(getLocation, 800));
-            </script>
-            """
-
-            components.html(geo_component, height=220)
-
-            # Read location from query params
-            params = st.query_params
-            lat_str = params.get("lat", [None])[0]
-            lon_str = params.get("lon", [None])[0]
-            acc_str = params.get("acc", [None])[0]
-
-            if lat_str and lon_str:
-                try:
-                    lat = float(lat_str)
-                    lon = float(lon_str)
-                    acc = float(acc_str) if acc_str else 999.0
-
-                    if acc > 120:
-                        st.error(f"Location accuracy too low (±{acc} m). Try again near a window or outside.")
-                    else:
-                        inside, dist = is_in_lecture_hall(lat, lon)
-
-                        if inside:
-                            name_row = students_df[students_df["student_id"] == st.session_state["user_id"]]
-                            name = name_row["name"].iloc[0] if not name_row.empty else "Unknown"
-
-                            now = datetime.now()
-                            new_record = pd.DataFrame([{
-                                "student_id": st.session_state["user_id"],
-                                "name": name,
-                                "date": now.strftime("%Y-%m-%d"),
-                                "time": now.strftime("%H:%M:%S"),
-                                "session": st.session_state["current_session"],
-                                "distance_m": dist
-                            }])
-
-                            attendance_df = pd.concat([attendance_df, new_record], ignore_index=True)
-                            attendance_df.to_csv(ATTENDANCE_FILE, index=False)
-                            st.session_state["attendance_df"] = attendance_df
-
-                            st.success(f"**Attendance marked successfully!**  ≈ {dist} m from center (accuracy ±{acc} m)")
+                        # Invalidate used code
+                        del session_codes[data["student_id"]]
+                        if not session_codes:
+                            if session_key in codes:
+                                del codes[session_key]
                         else:
-                            st.error(f"You appear to be outside the lecture hall area (≈ {dist} m away).")
-                except Exception as e:
-                    st.error("Error processing location. Please try again.")
+                            codes[session_key]["codes"] = session_codes
+                        save_codes(codes)
+                        st.session_state.codes = codes
 
-            # Optional: clear params after processing (prevents duplicate marking on refresh)
-            if "lat" in params:
-                st.query_params.clear()
+                        st.success("Attendance successfully marked!")
+                        st.rerun()
+                    else:
+                        st.error("Invalid or already used code. Please check with your Course Rep.")
 
-# ── FOOTER ──────────────────────────────────────────────────
+# Footer
 st.markdown("---")
-st.caption("Location-verified attendance system • Requires browser location permission")
+st.caption(
+    "FUTO Attendance System • Per-level Course Rep login • "
+    "Unique one-time codes • Contact your level Course Rep for password or code"
+            )
