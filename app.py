@@ -40,14 +40,42 @@ def device_id():
 
 def gen_code():
     return f"{secrets.randbelow(10000):04d}"
-# ---------- INIT DEFAULT DATA ----------
+# ---------- INIT DEFAULT DATA (FULL FUTO) ----------
 if not os.path.exists(SCHOOLS_FILE):
-    save_csv(pd.DataFrame({"name":["SEET","SICT","SOBS","SMAT"]}), SCHOOLS_FILE)
+    save_csv(pd.DataFrame({"name":[
+        "SAAT","SBMS","SOBS","SEET","SESET",
+        "SOES","SOHT","SICT","SMAT","SOPS"
+    ]}), SCHOOLS_FILE)
 
 if not os.path.exists(DEPARTMENTS_FILE):
     save_csv(pd.DataFrame({
-        "school":["SICT","SICT","SEET","SOBS"],
-        "department":["Computer Science","Software Engineering","Mechanical Engineering","Microbiology"]
+        "school":[
+            "SAAT","SAAT","SAAT","SAAT","SAAT","SAAT","SAAT",
+            "SBMS","SBMS",
+            "SOBS","SOBS","SOBS","SOBS","SOBS",
+            "SEET","SEET","SEET","SEET","SEET","SEET","SEET","SEET","SEET",
+            "SESET","SESET","SESET","SESET","SESET",
+            "SOES","SOES","SOES","SOES","SOES","SOES",
+            "SOHT","SOHT","SOHT","SOHT","SOHT",
+            "SICT","SICT","SICT","SICT",
+            "SMAT","SMAT","SMAT","SMAT","SMAT",
+            "SOPS","SOPS","SOPS","SOPS","SOPS","SOPS"
+        ],
+        "department":[
+            "Agricultural Economics","Agricultural Extension","Animal Science & Technology","Crop Science & Technology",
+            "Fisheries & Aquaculture Technology","Forestry & Wildlife Technology","Soil Science & Technology",
+            "Anatomy","Physiology",
+            "Biochemistry","Biology","Biotechnology","Microbiology","Forensic Science",
+            "Agricultural & Bioresources Engineering","Chemical Engineering","Civil Engineering","Food Science & Technology",
+            "Materials & Metallurgical Engineering","Mechanical Engineering","Mechatronics Engineering","Petroleum Engineering",
+            "Polymer & Textile Engineering",
+            "Computer Engineering","Electrical Power Engineering","Electronics Engineering","Telecommunications Engineering","Mechatronics Engineering",
+            "Architecture","Building Technology","Environmental Management","Quantity Surveying","Surveying & Geoinformatics","Urban & Regional Planning",
+            "Biomedical Technology","Dental Technology","Optometry","Prosthetics & Orthotics","Public Health Technology",
+            "Computer Science","Information Technology","Cyber Security","Software Engineering",
+            "Financial Management Technology","Information Management Technology","Maritime Management Technology","Project Management Technology","Transport Management Technology",
+            "Chemistry","Geology","Mathematics","Physics","Science Laboratory Technology","Statistics"
+        ]
     }), DEPARTMENTS_FILE)
 
 if not os.path.exists(REPS_FILE):
@@ -55,6 +83,7 @@ if not os.path.exists(REPS_FILE):
         ["rep1","pass123","SICT","Computer Science","300"]
     ], columns=REP_COLS), REPS_FILE)
 
+# ---------- CODE SYSTEM ----------
 def write_new_code(session_id):
     codes = load_csv(CODES_FILE, CODE_COLS)
     code = gen_code()
@@ -93,8 +122,12 @@ def student_page():
 
     depts = load_csv(DEPARTMENTS_FILE, ["school","department"])
     dept_list = depts[depts["school"] == school]["department"]
-    department = st.selectbox("Select Department", dept_list)
 
+    if dept_list.empty:
+        st.warning("No departments found for this school.")
+        return
+
+    department = st.selectbox("Select Department", dept_list)
     level = st.selectbox("Select Level", LEVELS)
 
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
@@ -125,19 +158,22 @@ def student_page():
         return
 
     name = st.text_input("Full Name")
-    matric = st.text_input("Matric Number (11 digits)")
+    matric = st.text_input("Matric Number")
 
     if st.button("Submit Attendance"):
         records = load_csv(RECORDS_FILE, RECORD_COLS)
 
+        # No duplicate name (case-insensitive)
         if normalize(name) in records["name"].apply(normalize).values:
             st.error("Duplicate name")
             return
 
+        # No duplicate matric
         if matric in records["matric"].values:
             st.error("Matric already used")
             return
 
+        # One entry per device
         dev = device_id()
         if dev in records["device_id"].values:
             st.error("One entry per device")
@@ -183,6 +219,7 @@ def rep_dashboard():
     ]
 
     if data_sessions.empty:
+        st.info("No sessions yet.")
         return
 
     sid = st.selectbox("Select Session", data_sessions["session_id"])
