@@ -12,9 +12,16 @@ REP_COLS = ["username", "password", "school", "department", "level"]
 LEVELS = ["100", "200", "300", "400", "500"]
 
 def load_csv(file, cols):
-    if os.path.exists(file):
-        return pd.read_csv(file, dtype=str)
-    return pd.DataFrame(columns=cols)
+    if not os.path.exists(file):
+        return pd.DataFrame(columns=cols)
+
+    try:
+        df = pd.read_csv(file, dtype=str)
+        if df.empty and list(df.columns) == []:
+            return pd.DataFrame(columns=cols)
+        return df
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame(columns=cols)
 
 def save_csv(df, file):
     df.to_csv(file, index=False)
