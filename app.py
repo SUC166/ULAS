@@ -1,17 +1,17 @@
 import streamlit as st
 import pandas as pd
-import os, re, time, secrets, hashlib
+import os, time, re, secrets, hashlib
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
-TOKEN_LIFETIME = 20
-
-SESSIONS_FILE = "sessions.csv"
-RECORDS_FILE = "records.csv"
-CODES_FILE = "codes.csv"
 SCHOOLS_FILE = "schools.csv"
 DEPARTMENTS_FILE = "departments.csv"
 REPS_FILE = "reps.csv"
+SESSIONS_FILE = "sessions.csv"
+RECORDS_FILE = "records.csv"
+CODES_FILE = "codes.csv"
+
+TOKEN_LIFETIME = 20
 
 SESSION_COLS = ["session_id","school","department","level","title","status","created_at"]
 RECORD_COLS = ["session_id","school","department","level","name","matric","time","device_id"]
@@ -21,7 +21,9 @@ REP_COLS = ["username","password","school","department","level"]
 LEVELS = ["100","200","300","400","500"]
 
 def load_csv(file, cols):
-    return pd.read_csv(file, dtype=str) if os.path.exists(file) else pd.DataFrame(columns=cols)
+    if os.path.exists(file):
+        return pd.read_csv(file, dtype=str)
+    return pd.DataFrame(columns=cols)
 
 def save_csv(df, file):
     df.to_csv(file, index=False)
@@ -32,6 +34,9 @@ def now():
 def normalize(txt):
     return re.sub(r"\s+", " ", str(txt).strip()).lower()
 
+def hash_password(pw):
+    return hashlib.sha256(pw.encode()).hexdigest()
+
 def device_id():
     if "device_id" not in st.session_state:
         raw = f"{time.time()}{secrets.token_hex()}"
@@ -40,50 +45,6 @@ def device_id():
 
 def gen_code():
     return f"{secrets.randbelow(10000):04d}"
-# ---------- INIT DEFAULT DATA (FULL FUTO) ----------
-if not os.path.exists(SCHOOLS_FILE):
-    save_csv(pd.DataFrame({"name":[
-        "SAAT","SBMS","SOBS","SEET","SESET",
-        "SOES","SOHT","SICT","SMAT","SOPS"
-    ]}), SCHOOLS_FILE)
-
-if not os.path.exists(DEPARTMENTS_FILE):
-    save_csv(pd.DataFrame({
-        "school":[
-            "SAAT","SAAT","SAAT","SAAT","SAAT","SAAT","SAAT",
-            "SBMS","SBMS",
-            "SOBS","SOBS","SOBS","SOBS","SOBS",
-            "SEET","SEET","SEET","SEET","SEET","SEET","SEET","SEET","SEET",
-            "SESET","SESET","SESET","SESET","SESET",
-            "SOES","SOES","SOES","SOES","SOES","SOES",
-            "SOHT","SOHT","SOHT","SOHT","SOHT",
-            "SICT","SICT","SICT","SICT",
-            "SMAT","SMAT","SMAT","SMAT","SMAT",
-            "SOPS","SOPS","SOPS","SOPS","SOPS","SOPS"
-        ],
-        "department":[
-            "Agricultural Economics","Agricultural Extension","Animal Science & Technology","Crop Science & Technology",
-            "Fisheries & Aquaculture Technology","Forestry & Wildlife Technology","Soil Science & Technology",
-            "Anatomy","Physiology",
-            "Biochemistry","Biology","Biotechnology","Microbiology","Forensic Science",
-            "Agricultural & Bioresources Engineering","Chemical Engineering","Civil Engineering","Food Science & Technology",
-            "Materials & Metallurgical Engineering","Mechanical Engineering","Mechatronics Engineering","Petroleum Engineering",
-            "Polymer & Textile Engineering",
-            "Computer Engineering","Electrical Power Engineering","Electronics Engineering","Telecommunications Engineering","Mechatronics Engineering",
-            "Architecture","Building Technology","Environmental Management","Quantity Surveying","Surveying & Geoinformatics","Urban & Regional Planning",
-            "Biomedical Technology","Dental Technology","Optometry","Prosthetics & Orthotics","Public Health Technology",
-            "Computer Science","Information Technology","Cyber Security","Software Engineering",
-            "Financial Management Technology","Information Management Technology","Maritime Management Technology","Project Management Technology","Transport Management Technology",
-            "Chemistry","Geology","Mathematics","Physics","Science Laboratory Technology","Statistics"
-        ]
-    }), DEPARTMENTS_FILE)
-
-if not os.path.exists(REPS_FILE):
-    save_csv(pd.DataFrame([
-        ["rep1","pass123","SICT","Computer Science","300"]
-    ], columns=REP_COLS), REPS_FILE)
-
-# ---------- CODE SYSTEM ----------
 def write_new_code(session_id):
     codes = load_csv(CODES_FILE, CODE_COLS)
     code = gen_code()
@@ -99,12 +60,12 @@ def get_latest_code(session_id):
     codes["created_at"] = pd.to_datetime(codes["created_at"])
     return codes.sort_values("created_at").iloc[-1]
 
-def code_valid(session_id, entered_code):
+def code_valid(session_id, entered):
     latest = get_latest_code(session_id)
     if latest is None:
         return False
     age = (datetime.now() - latest["created_at"]).total_seconds()
-    return str(latest["code"]) == str(entered_code).zfill(4) and age <= TOKEN_LIFETIME
+    return str(latest["code"]) == str(entered).zfill(4) and age <= TOKEN_LIFETIME
 
 def rep_live_code(session_id):
     latest = get_latest_code(session_id)
@@ -118,17 +79,15 @@ def student_page():
     st.title("ULAS — Student Attendance")
 
     schools = load_csv(SCHOOLS_FILE, ["name"])
-    school = st.selectbox("Select School", schools["name"])
+    school = st.selectbox("School", schools["name"])
 
     depts = load_csv(DEPARTMENTS_FILE, ["school","department"])
-    dept_list = depts[depts["school"] == school]["department"]
+    department = st.selectbox(
+        "Department",
+        depts[depts["school"] == school]["department"]
+    )
 
-    if dept_list.empty:
-        st.warning("No departments found for this school.")
-        return
-
-    department = st.selectbox("Select Department", dept_list)
-    level = st.selectbox("Select Level", LEVELS)
+    level = st.selectbox("Level", LEVELS)
 
     sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
     active = sessions[
@@ -139,22 +98,22 @@ def student_page():
     ]
 
     if active.empty:
-        st.info("No active attendance for your class.")
+        st.info("No active attendance")
         return
 
     session = active.iloc[-1]
     sid = session["session_id"]
 
-    entered = st.text_input("Enter Live Code")
+    code = st.text_input("4-digit code")
 
-    if st.button("Continue"):
-        if not code_valid(sid, entered):
+    if st.button("Verify Code"):
+        if not code_valid(sid, code):
             st.error("Invalid or expired code")
             return
         st.session_state.sid = sid
         st.success("Code accepted")
 
-    if "sid" not in st.session_state or st.session_state.sid != sid:
+    if st.session_state.get("sid") != sid:
         return
 
     name = st.text_input("Full Name")
@@ -163,113 +122,109 @@ def student_page():
     if st.button("Submit Attendance"):
         records = load_csv(RECORDS_FILE, RECORD_COLS)
 
-        # No duplicate name (case-insensitive)
         if normalize(name) in records["name"].apply(normalize).values:
-            st.error("Duplicate name")
+            st.error("Name already recorded")
             return
-
-        # No duplicate matric
         if matric in records["matric"].values:
             st.error("Matric already used")
             return
-
-        # One entry per device
-        dev = device_id()
-        if dev in records["device_id"].values:
+        if device_id() in records["device_id"].values:
             st.error("One entry per device")
             return
 
         records.loc[len(records)] = [
-            sid, school, department, level, name, matric, now(), dev
+            sid, school, department, level,
+            name, matric, now(), device_id()
         ]
-
         save_csv(records, RECORDS_FILE)
-        st.success("Attendance recorded")
-def rep_dashboard():
-    st_autorefresh(interval=1000, key="refresh")
-    st.title("ULAS — Course Rep Dashboard")
+        st.success("Attendance submitted")
+
+def rep_login():
+    st.title("Course Rep Login")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
     reps = load_csv(REPS_FILE, REP_COLS)
-    rep = reps[reps["username"] == st.session_state.rep_user].iloc[0]
 
+    if st.button("Login"):
+        hashed = hash_password(password)
+        rep = reps[
+            (reps["username"] == username) &
+            (reps["password"] == hashed)
+        ]
+        if rep.empty:
+            st.error("Invalid login")
+            return
+        st.session_state.rep = rep.iloc[0].to_dict()
+        st.rerun()
+def rep_dashboard():
+    st_autorefresh(interval=1000, key="rep_refresh")
+
+    rep = st.session_state.rep
     school = rep["school"]
     department = rep["department"]
     level = rep["level"]
 
-    st.write(f"**{school} — {department} — Level {level}**")
+    st.title("Course Rep Dashboard")
+    st.write(f"**{school} / {department} / {level} Level**")
+
+    sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
 
     if st.button("Start Attendance"):
-        sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
         sid = str(time.time())
-        title = f"{department} {level} — {now()}"
-
         sessions.loc[len(sessions)] = [
-            sid, school, department, level, title, "Active", now()
+            sid, school, department, level,
+            f"{department} {level}", "Active", now()
         ]
-
         save_csv(sessions, SESSIONS_FILE)
         write_new_code(sid)
         st.rerun()
 
-    sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
-    data_sessions = sessions[
+    my_sessions = sessions[
         (sessions["school"] == school) &
         (sessions["department"] == department) &
         (sessions["level"] == level)
     ]
 
-    if data_sessions.empty:
-        st.info("No sessions yet.")
+    if my_sessions.empty:
         return
 
-    sid = st.selectbox("Select Session", data_sessions["session_id"])
-    session = data_sessions[data_sessions["session_id"] == sid].iloc[0]
-
-    records = load_csv(RECORDS_FILE, RECORD_COLS)
-    data = records[records["session_id"] == sid]
+    sid = st.selectbox("Attendance Sessions", my_sessions["session_id"])
+    session = my_sessions[my_sessions["session_id"] == sid].iloc[0]
 
     if session["status"] == "Active":
         code, remaining = rep_live_code(sid)
         st.markdown(f"## Live Code: `{code}`")
         st.caption(f"Changes in {remaining}s")
 
-        if st.button("🛑 END ATTENDANCE"):
-            sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
+        if st.button("End Attendance"):
+            sessions.loc[
+                sessions["session_id"] == sid,
+                "status"
+            ] = "Ended"
             save_csv(sessions, SESSIONS_FILE)
+            st.success("Attendance ended")
             st.rerun()
 
-    st.subheader("Attendance Records")
+    records = load_csv(RECORDS_FILE, RECORD_COLS)
+    data = records[records["session_id"] == sid]
+
     st.dataframe(data[["name","matric","time"]])
 
     st.download_button(
         "Download CSV",
         data=data[["name","matric","time"]].to_csv(index=False),
-        file_name=f"{session['title']}.csv"
+        file_name="attendance.csv"
     )
 
-def rep_login():
-    st.title("Course Rep Login")
-
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
-
-    reps = load_csv(REPS_FILE, REP_COLS)
-
-    if st.button("Login"):
-        match = reps[(reps["username"] == u) & (reps["password"] == p)]
-        if match.empty:
-            st.error("Invalid login")
-        else:
-            st.session_state.rep_user = u
-            st.rerun()
-
 def main():
-    page = st.sidebar.selectbox("Page", ["Student", "Course Rep"])
+    page = st.sidebar.selectbox("Page", ["Student","Course Rep"])
 
     if page == "Student":
         student_page()
     else:
-        if "rep_user" not in st.session_state:
+        if "rep" not in st.session_state:
             rep_login()
         else:
             rep_dashboard()
