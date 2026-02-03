@@ -1,367 +1,241 @@
 import streamlit as st
 import pandas as pd
+import os, re, time, secrets, hashlib
 from datetime import datetime
-import random
-import string
-import os
-import json
-import hashlib
+from streamlit_autorefresh import st_autorefresh
 
-# ────────────────────────────────────────────────
-#               CONFIGURATION
-# ────────────────────────────────────────────────
+TOKEN_LIFETIME = 20
 
-SCHOOLS_DEPTS = {
-    "SAAT (Agriculture & Agric Tech)": [
-        "Agricultural Economics", "Agricultural Extension", "Animal Science and Technology",
-        "Crop Science and Technology", "Fisheries and Aquaculture Technology",
-        "Forestry and Wildlife Technology", "Soil Science and Technology"
-    ],
-    "SEET (Engineering & Eng Tech)": [
-        "Agricultural and Bioresources Engineering", "Biomedical Engineering", "Chemical Engineering",
-        "Civil Engineering", "Electrical and Electronics Engineering", "Food Science and Technology",
-        "Materials and Metallurgical Engineering", "Mechanical Engineering", "Mechatronic Engineering",
-        "Petroleum Engineering", "Polymer and Textile Engineering"
-    ],
-    "SOES (Environmental Tech)": [
-        "Architecture", "Building Technology", "Environmental Technology", "Quantity Surveying",
-        "Surveying and Geoinformatics", "Urban and Regional Planning"
-    ],
-    "SOHT (Health Tech)": [
-        "Biomedical Technology", "Dental Technology", "Environmental Health Science", "Optometry",
-        "Prosthetics and Orthotics", "Public Health Technology"
-    ],
-    "SICT (Info & Comm Tech)": [
-        "Computer Science", "Cyber Security Science", "Information Technology", "Software Engineering"
-    ],
-    "SMAT (Management Tech)": [
-        "Financial Management Technology", "Information Management Technology",
-        "Maritime Management Technology", "Project Management Technology", "Transport Management Technology"
-    ],
-    "SOPS (Physical Sciences)": [
-        "Chemistry", "Geology", "Mathematics", "Physics", "Statistics"
-    ],
-    "SOBS (Biological Sciences)": [
-        "Biochemistry", "Biology", "Biotechnology", "Microbiology", "Forensic Science"
-    ],
-    "SBMS (Basic Medical Sciences)": [
-        "Anatomy", "Physiology"
-    ],
-}
+SESSIONS_FILE = "sessions.csv"
+RECORDS_FILE = "records.csv"
+CODES_FILE = "codes.csv"
+SCHOOLS_FILE = "schools.csv"
+DEPARTMENTS_FILE = "departments.csv"
+REPS_FILE = "reps.csv"
 
-LEVELS = ["100 Level", "200 Level", "300 Level", "400 Level", "500 Level"]
+SESSION_COLS = ["session_id","school","department","level","title","status","created_at"]
+RECORD_COLS = ["session_id","school","department","level","name","matric","time","device_id"]
+CODE_COLS = ["session_id","code","created_at"]
+REP_COLS = ["username","password","school","department","level"]
 
-# CHANGE THESE TWO BEFORE USING!
-SETUP_SECRET = "futo_setup_2026_admin"           # Secret to access rep creation mode
-INITIAL_ADMIN_PASSWORD = "change_me_12345"       # Use this only the first time
+LEVELS = ["100","200","300","400","500"]
 
-STUDENTS_FILE    = "students.csv"
-ATTENDANCE_FILE  = "attendance.csv"
-CODES_FILE       = "attendance_codes.json"
-REPS_FILE        = "course_reps.json"   # { "school-dept-level": "hashed_password" }
-# ────────────────────────────────────────────────
-#               HELPER FUNCTIONS
-# ────────────────────────────────────────────────
+def load_csv(file, cols):
+    return pd.read_csv(file, dtype=str) if os.path.exists(file) else pd.DataFrame(columns=cols)
 
-def hash_pw(pw: str) -> str:
-    return hashlib.sha256(pw.encode()).hexdigest()
+def save_csv(df, file):
+    df.to_csv(file, index=False)
 
-def generate_code() -> str:
-    chars = string.ascii_uppercase + string.digits
-    return ''.join(random.choice(chars) for _ in range(6))
+def now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def load_reps() -> dict:
-    if os.path.exists(REPS_FILE):
-        with open(REPS_FILE, "r") as f:
-            return json.load(f)
-    return {}
+def normalize(txt):
+    return re.sub(r"\s+", " ", str(txt).strip()).lower()
 
-def save_reps(data: dict):
-    with open(REPS_FILE, "w") as f:
-        json.dump(data, f)
+def device_id():
+    if "device_id" not in st.session_state:
+        raw = f"{time.time()}{secrets.token_hex()}"
+        st.session_state.device_id = hashlib.sha256(raw.encode()).hexdigest()
+    return st.session_state.device_id
 
-def load_codes() -> dict:
-    if os.path.exists(CODES_FILE):
-        with open(CODES_FILE, "r") as f:
-            return json.load(f)
-    return {}
+def gen_code():
+    return f"{secrets.randbelow(10000):04d}"
+# ---------- INIT DEFAULT DATA ----------
+if not os.path.exists(SCHOOLS_FILE):
+    save_csv(pd.DataFrame({"name":["SEET","SICT","SOBS","SMAT"]}), SCHOOLS_FILE)
 
-def save_codes(data: dict):
-    with open(CODES_FILE, "w") as f:
-        json.dump(data, f)
-# ────────────────────────────────────────────────
-#               SESSION STATE INITIALIZATION
-# ────────────────────────────────────────────────
+if not os.path.exists(DEPARTMENTS_FILE):
+    save_csv(pd.DataFrame({
+        "school":["SICT","SICT","SEET","SOBS"],
+        "department":["Computer Science","Software Engineering","Mechanical Engineering","Microbiology"]
+    }), DEPARTMENTS_FILE)
 
-if "initialized" not in st.session_state:
-    st.session_state.initialized = True
-    st.session_state.students_df = (
-        pd.read_csv(STUDENTS_FILE)
-        if os.path.exists(STUDENTS_FILE)
-        else pd.DataFrame(columns=["student_id", "name", "school", "dept", "level"])
-    )
-    st.session_state.attendance_df = (
-        pd.read_csv(ATTENDANCE_FILE)
-        if os.path.exists(ATTENDANCE_FILE)
-        else pd.DataFrame(columns=["student_id", "name", "school", "dept", "level", "date", "time", "session"])
-    )
-    st.session_state.codes = load_codes()
-    st.session_state.reps = load_reps()
-    st.session_state.user_role = None
-    st.session_state.user_data = {}
+if not os.path.exists(REPS_FILE):
+    save_csv(pd.DataFrame([
+        ["rep1","pass123","SICT","Computer Science","300"]
+    ], columns=REP_COLS), REPS_FILE)
 
-students_df   = st.session_state.students_df
-attendance_df = st.session_state.attendance_df
-codes         = st.session_state.codes
-reps          = st.session_state.reps
-# ────────────────────────────────────────────────
-#               SIDEBAR – LOGIN & SETUP
-# ────────────────────────────────────────────────
+def write_new_code(session_id):
+    codes = load_csv(CODES_FILE, CODE_COLS)
+    code = gen_code()
+    codes.loc[len(codes)] = [session_id, code, now()]
+    save_csv(codes, CODES_FILE)
+    return code
 
-st.sidebar.title("FUTO Attendance System")
+def get_latest_code(session_id):
+    codes = load_csv(CODES_FILE, CODE_COLS)
+    codes = codes[codes["session_id"] == session_id]
+    if codes.empty:
+        return None
+    codes["created_at"] = pd.to_datetime(codes["created_at"])
+    return codes.sort_values("created_at").iloc[-1]
 
-# Hidden setup mode for creating course reps
-setup_mode = st.sidebar.checkbox("Admin Setup (Course Rep Creation)", value=False)
-if setup_mode:
-    secret_input = st.sidebar.text_input("Setup Secret Key", type="password")
-    if secret_input == SETUP_SECRET:
-        st.sidebar.success("Setup mode enabled")
-        s_setup = st.sidebar.selectbox("School", list(SCHOOLS_DEPTS.keys()), key="s_setup")
-        d_setup = st.sidebar.selectbox("Department", SCHOOLS_DEPTS[s_setup], key="d_setup")
-        l_setup = st.sidebar.selectbox("Level", LEVELS, key="l_setup")
-        new_password = st.sidebar.text_input("New Course Rep Password", type="password", key="new_pw")
-        rep_key = f"{s_setup}-{d_setup}-{l_setup}"
+def code_valid(session_id, entered_code):
+    latest = get_latest_code(session_id)
+    if latest is None:
+        return False
+    age = (datetime.now() - latest["created_at"]).total_seconds()
+    return str(latest["code"]) == str(entered_code).zfill(4) and age <= TOKEN_LIFETIME
 
-        if st.sidebar.button("Create / Update Course Rep"):
-            if new_password.strip():
-                reps[rep_key] = hash_pw(new_password.strip())
-                save_reps(reps)
-                st.session_state.reps = reps
-                st.sidebar.success(f"Course Rep set for {rep_key}")
-            else:
-                st.sidebar.error("Enter a password")
-    else:
-        if secret_input:
-            st.sidebar.error("Incorrect secret key")
+def rep_live_code(session_id):
+    latest = get_latest_code(session_id)
+    if latest is None:
+        return write_new_code(session_id), TOKEN_LIFETIME
+    age = (datetime.now() - latest["created_at"]).total_seconds()
+    if age >= TOKEN_LIFETIME:
+        return write_new_code(session_id), TOKEN_LIFETIME
+    return latest["code"], int(TOKEN_LIFETIME - age)
+def student_page():
+    st.title("ULAS — Student Attendance")
 
-# Normal login
-role = st.sidebar.radio("Login As", ["Student", "Course Rep"])
+    schools = load_csv(SCHOOLS_FILE, ["name"])
+    school = st.selectbox("Select School", schools["name"])
 
-school = st.sidebar.selectbox("School", list(SCHOOLS_DEPTS.keys()))
-dept   = st.sidebar.selectbox("Department", SCHOOLS_DEPTS[school])
-level  = st.sidebar.selectbox("Level", LEVELS)
+    depts = load_csv(DEPARTMENTS_FILE, ["school","department"])
+    dept_list = depts[depts["school"] == school]["department"]
+    department = st.selectbox("Select Department", dept_list)
 
-key_prefix = f"{school}-{dept}-{level}"
+    level = st.selectbox("Select Level", LEVELS)
 
-if role == "Student":
-    student_id = st.sidebar.text_input("Matric Number").strip().upper()
-    if st.sidebar.button("Login / Register"):
-        if not student_id:
-            st.sidebar.error("Enter Matric Number")
-        else:
-            match = students_df[
-                (students_df["student_id"] == student_id) &
-                (students_df["school"] == school) &
-                (students_df["dept"] == dept) &
-                (students_df["level"] == level)
-            ]
-            if not match.empty:
-                st.session_state.user_role = "student"
-                st.session_state.user_data = {
-                    "school": school, "dept": dept, "level": level,
-                    "student_id": student_id, "name": match["name"].iloc[0]
-                }
-                st.rerun()
-            else:
-                name = st.sidebar.text_input("Your Full Name (first time)")
-                if name and st.sidebar.button("Register"):
-                    new_row = pd.DataFrame({
-                        "student_id": [student_id], "name": [name],
-                        "school": [school], "dept": [dept], "level": [level]
-                    })
-                    st.session_state.students_df = pd.concat([students_df, new_row], ignore_index=True)
-                    st.session_state.students_df.to_csv(STUDENTS_FILE, index=False)
-                    st.session_state.user_role = "student"
-                    st.session_state.user_data = {
-                        "school": school, "dept": dept, "level": level,
-                        "student_id": student_id, "name": name
-                    }
-                    st.success("Registered!")
-                    st.rerun()
-
-else:  # Course Rep
-    password_input = st.sidebar.text_input("Your Password", type="password")
-    if st.sidebar.button("Login as Course Rep"):
-        rep_key = key_prefix
-        if rep_key in reps and hash_pw(password_input) == reps[rep_key]:
-            st.session_state.user_role = "admin"
-            st.session_state.user_data = {
-                "school": school, "dept": dept, "level": level, "rep_key": rep_key
-            }
-            st.rerun()
-        else:
-            st.sidebar.error("Incorrect password or no account for this level")
-
-# Show current login status
-if st.session_state.user_role is not None:
-    data = st.session_state.user_data
-    role_text = "Course Rep" if st.session_state.user_role == "admin" else "Student"
-    st.sidebar.markdown(
-        f"**Logged in as {role_text}**  \n"
-        f"{data.get('school')} → {data.get('dept')} → {data.get('level')}"
-    )
-    if st.sidebar.button("Logout"):
-        st.session_state.user_role = None
-        st.session_state.user_data = {}
-        st.rerun()
-# ────────────────────────────────────────────────
-#               MAIN CONTENT
-# ────────────────────────────────────────────────
-
-st.title("FUTO Departmental Attendance System")
-st.caption("One-time unique codes • Each level has its own Course Rep")
-
-if st.session_state.user_role is None:
-    st.info("Please log in using the sidebar.")
-    st.stop()
-
-session_key = key_prefix
-
-if st.session_state.user_role == "admin":
-    st.subheader("Course Rep Dashboard")
-
-    current_session_name = st.session_state.get("current_session", {}).get(session_key)
-
-    if current_session_name is None:
-        session_name_input = st.text_input("Session / Course & Date")
-        if st.button("Start Attendance Session"):
-            if session_name_input.strip():
-                dept_students = students_df[
-                    (students_df["school"] == data["school"]) &
-                    (students_df["dept"] == data["dept"]) &
-                    (students_df["level"] == data["level"])
-                ]
-                if dept_students.empty:
-                    st.warning("No students registered in this level yet.")
-                else:
-                    new_codes_dict = {}
-                    for _, row in dept_students.iterrows():
-                        new_codes_dict[row["student_id"]] = generate_code()
-
-                    codes[session_key] = {
-                        "session_name": session_name_input.strip(),
-                        "codes": new_codes_dict
-                    }
-                    save_codes(codes)
-                    st.session_state.codes = codes
-                    st.session_state.current_session = {session_key: session_name_input.strip()}
-                    st.success(f"Session started. {len(new_codes_dict)} codes generated.")
-                    st.rerun()
-            else:
-                st.error("Please enter session name")
-    else:
-        st.success(f"**Active Session:** {current_session_name}")
-        current_codes = codes.get(session_key, {}).get("codes", {})
-
-        if current_codes:
-            code_list = [{"Matric Number": sid, "Code": code} for sid, code in current_codes.items()]
-            st.dataframe(pd.DataFrame(code_list).sort_values("Matric Number"), use_container_width=True, hide_index=True)
-
-            txt_content = "\n".join([f"{sid}: {code}" for sid, code in current_codes.items()])
-            st.download_button(
-                label="Download all codes (TXT)",
-                data=txt_content,
-                file_name=f"codes_{session_key.replace(' ', '_')}.txt",
-                mime="text/plain"
-            )
-
-        if st.button("End Session & Delete Codes"):
-            if session_key in codes:
-                del codes[session_key]
-                save_codes(codes)
-                st.session_state.codes = codes
-            if "current_session" in st.session_state and session_key in st.session_state.current_session:
-                del st.session_state.current_session[session_key]
-            st.success("Session closed. Codes removed.")
-            st.rerun()
-
-    # Attendance records for this level
-    level_records = attendance_df[
-        (attendance_df["school"] == data["school"]) &
-        (attendance_df["dept"] == data["dept"]) &
-        (attendance_df["level"] == data["level"])
+    sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
+    active = sessions[
+        (sessions["school"] == school) &
+        (sessions["department"] == department) &
+        (sessions["level"] == level) &
+        (sessions["status"] == "Active")
     ]
-    if st.button("Show Attendance Records"):
-        if level_records.empty:
-            st.info("No attendance recorded yet for this level.")
+
+    if active.empty:
+        st.info("No active attendance for your class.")
+        return
+
+    session = active.iloc[-1]
+    sid = session["session_id"]
+
+    entered = st.text_input("Enter Live Code")
+
+    if st.button("Continue"):
+        if not code_valid(sid, entered):
+            st.error("Invalid or expired code")
+            return
+        st.session_state.sid = sid
+        st.success("Code accepted")
+
+    if "sid" not in st.session_state or st.session_state.sid != sid:
+        return
+
+    name = st.text_input("Full Name")
+    matric = st.text_input("Matric Number (11 digits)")
+
+    if st.button("Submit Attendance"):
+        records = load_csv(RECORDS_FILE, RECORD_COLS)
+
+        if normalize(name) in records["name"].apply(normalize).values:
+            st.error("Duplicate name")
+            return
+
+        if matric in records["matric"].values:
+            st.error("Matric already used")
+            return
+
+        dev = device_id()
+        if dev in records["device_id"].values:
+            st.error("One entry per device")
+            return
+
+        records.loc[len(records)] = [
+            sid, school, department, level, name, matric, now(), dev
+        ]
+
+        save_csv(records, RECORDS_FILE)
+        st.success("Attendance recorded")
+def rep_dashboard():
+    st_autorefresh(interval=1000, key="refresh")
+    st.title("ULAS — Course Rep Dashboard")
+
+    reps = load_csv(REPS_FILE, REP_COLS)
+    rep = reps[reps["username"] == st.session_state.rep_user].iloc[0]
+
+    school = rep["school"]
+    department = rep["department"]
+    level = rep["level"]
+
+    st.write(f"**{school} — {department} — Level {level}**")
+
+    if st.button("Start Attendance"):
+        sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
+        sid = str(time.time())
+        title = f"{department} {level} — {now()}"
+
+        sessions.loc[len(sessions)] = [
+            sid, school, department, level, title, "Active", now()
+        ]
+
+        save_csv(sessions, SESSIONS_FILE)
+        write_new_code(sid)
+        st.rerun()
+
+    sessions = load_csv(SESSIONS_FILE, SESSION_COLS)
+    data_sessions = sessions[
+        (sessions["school"] == school) &
+        (sessions["department"] == department) &
+        (sessions["level"] == level)
+    ]
+
+    if data_sessions.empty:
+        return
+
+    sid = st.selectbox("Select Session", data_sessions["session_id"])
+    session = data_sessions[data_sessions["session_id"] == sid].iloc[0]
+
+    records = load_csv(RECORDS_FILE, RECORD_COLS)
+    data = records[records["session_id"] == sid]
+
+    if session["status"] == "Active":
+        code, remaining = rep_live_code(sid)
+        st.markdown(f"## Live Code: `{code}`")
+        st.caption(f"Changes in {remaining}s")
+
+        if st.button("🛑 END ATTENDANCE"):
+            sessions.loc[sessions["session_id"] == sid, "status"] = "Ended"
+            save_csv(sessions, SESSIONS_FILE)
+            st.rerun()
+
+    st.subheader("Attendance Records")
+    st.dataframe(data[["name","matric","time"]])
+
+    st.download_button(
+        "Download CSV",
+        data=data[["name","matric","time"]].to_csv(index=False),
+        file_name=f"{session['title']}.csv"
+    )
+
+def rep_login():
+    st.title("Course Rep Login")
+
+    u = st.text_input("Username")
+    p = st.text_input("Password", type="password")
+
+    reps = load_csv(REPS_FILE, REP_COLS)
+
+    if st.button("Login"):
+        match = reps[(reps["username"] == u) & (reps["password"] == p)]
+        if match.empty:
+            st.error("Invalid login")
         else:
-            st.dataframe(level_records.sort_values("date", ascending=False), use_container_width=True)
+            st.session_state.rep_user = u
+            st.rerun()
 
-elif st.session_state.user_role == "student":
-    st.subheader("Mark Your Attendance")
+def main():
+    page = st.sidebar.selectbox("Page", ["Student", "Course Rep"])
 
-    current_session_name = st.session_state.get("current_session", {}).get(session_key)
-
-    if current_session_name is None:
-        st.warning("No active attendance session for your level right now.")
+    if page == "Student":
+        student_page()
     else:
-        already_marked = attendance_df[
-            (attendance_df["student_id"] == data["student_id"]) &
-            (attendance_df["session"] == current_session_name) &
-            (attendance_df["school"] == data["school"]) &
-            (attendance_df["dept"] == data["dept"]) &
-            (attendance_df["level"] == data["level"])
-        ].shape[0] > 0
-
-        if already_marked:
-            st.success("You have already been marked present for this session.")
+        if "rep_user" not in st.session_state:
+            rep_login()
         else:
-            user_code = st.text_input("Enter the unique code from your Course Rep", max_chars=6).strip().upper()
+            rep_dashboard()
 
-            if st.button("Submit Code"):
-                if not user_code:
-                    st.error("Please enter the code")
-                else:
-                    session_data = codes.get(session_key, {})
-                    session_codes = session_data.get("codes", {})
-                    assigned_code = session_codes.get(data["student_id"])
-
-                    if assigned_code and user_code == assigned_code:
-                        now = datetime.now()
-                        record = {
-                            "student_id": data["student_id"],
-                            "name": data["name"],
-                            "school": data["school"],
-                            "dept": data["dept"],
-                            "level": data["level"],
-                            "date": now.strftime("%Y-%m-%d"),
-                            "time": now.strftime("%H:%M:%S"),
-                            "session": current_session_name
-                        }
-                        new_record_df = pd.DataFrame([record])
-                        st.session_state.attendance_df = pd.concat(
-                            [attendance_df, new_record_df], ignore_index=True
-                        )
-                        st.session_state.attendance_df.to_csv(ATTENDANCE_FILE, index=False)
-
-                        # Invalidate used code
-                        del session_codes[data["student_id"]]
-                        if not session_codes:
-                            if session_key in codes:
-                                del codes[session_key]
-                        else:
-                            codes[session_key]["codes"] = session_codes
-                        save_codes(codes)
-                        st.session_state.codes = codes
-
-                        st.success("Attendance successfully marked!")
-                        st.rerun()
-                    else:
-                        st.error("Invalid or already used code. Please check with your Course Rep.")
-
-# Footer
-st.markdown("---")
-st.caption(
-    "FUTO Attendance System • Per-level Course Rep login • "
-    "Unique one-time codes • Contact your level Course Rep for password or code"
-            )
+if __name__ == "__main__":
+    main()
